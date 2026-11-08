@@ -12,6 +12,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
+import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
@@ -36,9 +37,16 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
     private Economy econ = null;
     private Object ppAPI = null;
     
-    // Hangi oyuncu hangi eşyayı hangi fiyata satacak? (Geçici hafıza)
     private final Map<UUID, ItemStack> BEKLEYEN_ESYA = new HashMap<>();
     private final Map<UUID, Double> BEKLEYEN_FIYAT = new HashMap<>();
+    
+    // Arama ve Sayfalama İçin
+    private final Map<UUID, Boolean> ARAMA_MODU = new HashMap<>();
+    private final Map<UUID, String> ARAMA_FILTRE = new HashMap<>();
+    private final Map<UUID, Integer> MEVCUT_SAYFA = new HashMap<>();
+
+    private final int ESLYA_LIMIT = 10; // Oyuncu başına max eşya sınırı
+    private final int SAYFA_BASI_ESYA = 45;
 
     @Override
     public void onEnable() {
@@ -47,13 +55,11 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         if (!ahDosya.exists()) { try { ahDosya.createNewFile(); } catch (IOException e) { e.printStackTrace(); } }
         ahYml = YamlConfiguration.loadConfiguration(ahDosya);
 
-        // Vault Bağlantısı
         if (getServer().getPluginManager().getPlugin("Vault") != null) {
             RegisteredServiceProvider<Economy> rsp = getServer().getServicesManager().getRegistration(Economy.class);
             if (rsp != null) econ = rsp.getProvider();
         }
 
-        // PlayerPoints Bağlantısı (Reflection)
         Plugin ppPlugin = getServer().getPluginManager().getPlugin("PlayerPoints");
         if (ppPlugin != null && ppPlugin.isEnabled()) {
             try { ppAPI = ppPlugin.getClass().getMethod("getAPI").invoke(ppPlugin); } catch (Exception ignored) {}
@@ -69,6 +75,8 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         if (!(sender instanceof Player p)) return true;
 
         if (args.length == 0) {
+            ARAMA_FILTRE.remove(p.getUniqueId());
+            MEVCUT_SAYFA.put(p.getUniqueId(), 1);
             pazarMenuAc(p);
             return true;
         }
@@ -76,6 +84,14 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         if (args[0].equalsIgnoreCase("sell") || args[0].equalsIgnoreCase("sat")) {
             if (args.length < 2) {
                 p.sendMessage("§cKullanım: /ah sell <fiyat> (Örn: /ah sell 64)");
+                return true;
+            }
+
+            // EŞYA SINIRI KONTROLÜ
+            int mevcutEsya = getOyuncuEsyaSayisi(p.getUniqueId().toString());
+            if (mevcutEsya >= ESLYA_LIMIT) {
+                p.sendMessage("§cPazarda aynı anda en fazla §e" + ESLYA_LIMIT + " §ceşya satabilirsin!");
+                p.playSound(p.getLocation(), Sound.ENTITY_VILLAGER_NO, 1f, 1f);
                 return true;
             }
 
@@ -95,11 +111,9 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
                 return true;
             }
 
-            // Eşyayı elinden al ve birim seçim menüsüne yolla
             BEKLEYEN_ESYA.put(p.getUniqueId(), elindeki.clone());
             BEKLEYEN_FIYAT.put(p.getUniqueId(), fiyat);
             
-            // Elinden sil (Birim seçtikten sonra tamamen silinecek, şimdilik envanterden alıyoruz)
             p.getInventory().setItemInMainHand(new ItemStack(Material.AIR));
 
             birimSecimMenuAc(p, elindeki, fiyat);
@@ -110,12 +124,34 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         return true;
     }
 
+    private int getOyuncuEsyaSayisi(String uuid) {
+        int sayi = 0;
+        if (ahYml.contains("pazar")) {
+            ConfigurationSection sec = ahYml.getConfigurationSection("pazar");
+            for (String id : sec.getKeys(false)) {
+                if (uuid.equals(sec.getString(id + ".satan_uuid"))) sayi++;
+            }
+        }
+        return sayi;
+    }
+
     private void birimSecimMenuAc(Player p, ItemStack esya, double fiyat) {
         Inventory inv = Bukkit.createInventory(null, 27, "§8§l» §6§lSATIŞ BİRİMİ §8§l«");
         
         ItemStack cam = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
         ItemMeta cm = cam.getItemMeta(); if (cm != null) { cm.setDisplayName(" "); cam.setItemMeta(cm); }
         for (int i = 0; i < 27; i++) inv.setItem(i, cam);
+
+        ItemStack ortaEsya = esya.clone();
+        ItemMeta eMeta = ortaEsya.getItemMeta();
+        if (eMeta != null) {
+            List<String> lore = eMeta.hasLore() ? eMeta.getLore() : new ArrayList<>();
+            lore.add("");
+            lore.add("§aSattığın Eşya");
+            eMeta.setLore(lore);
+            ortaEsya.setItemMeta(eMeta);
+        }
+        inv.setItem(13, ortaEsya);
 
         ItemStack para = new ItemStack(Material.GOLD_INGOT);
         ItemMeta pMeta = para.getItemMeta();
@@ -143,36 +179,51 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
     }
 
     private void pazarMenuAc(Player p) {
-        Inventory inv = Bukkit.createInventory(null, 54, "§8§l» §6§lAÇIK ARTIRMA §8§l«");
+        String aranan = ARAMA_FILTRE.get(p.getUniqueId());
+        int sayfa = MEVCUT_SAYFA.getOrDefault(p.getUniqueId(), 1);
+        
+        String title = aranan != null ? "§8§l» §6§lAH (Arama) §8§l«" : "§8§l» §6§lAÇIK ARTIRMA §8§l«";
+        Inventory inv = Bukkit.createInventory(null, 54, title);
+        
+        List<String> gecerliIdler = new ArrayList<>();
         
         if (ahYml.contains("pazar")) {
             ConfigurationSection sec = ahYml.getConfigurationSection("pazar");
-            int slot = 0;
             for (String id : sec.getKeys(false)) {
-                if (slot >= 45) break;
-                
-                String satan = sec.getString(id + ".satan");
-                double fiyat = sec.getDouble(id + ".fiyat");
-                String birim = sec.getString(id + ".birim");
                 String base64 = sec.getString(id + ".item");
-                
                 ItemStack item = itemFromBase64(base64);
                 if (item != null) {
-                    ItemMeta meta = item.getItemMeta();
-                    if (meta != null) {
-                        List<String> lore = meta.hasLore() ? meta.getLore() : new ArrayList<>();
-                        lore.add("§8§m-----------------------");
-                        lore.add("§7Satıcı: §f" + satan);
-                        lore.add("§7Fiyat: §a" + fiyat + " " + birim.toUpperCase());
-                        lore.add("§8§m-----------------------");
-                        lore.add("§aSatın almak için tıkla!");
-                        lore.add("§8ID: " + id);
-                        meta.setLore(lore);
-                        item.setItemMeta(meta);
-                    }
-                    inv.setItem(slot++, item);
+                    if (aranan != null && !item.getType().name().contains(aranan.toUpperCase())) continue;
+                    gecerliIdler.add(id);
                 }
             }
+        }
+        
+        int toplamEsya = gecerliIdler.size();
+        int baslangicIndex = (sayfa - 1) * SAYFA_BASI_ESYA;
+        int bitisIndex = Math.min(baslangicIndex + SAYFA_BASI_ESYA, toplamEsya);
+
+        int slot = 0;
+        for (int i = baslangicIndex; i < bitisIndex; i++) {
+            String id = gecerliIdler.get(i);
+            String satan = ahYml.getString("pazar." + id + ".satan");
+            double fiyat = ahYml.getDouble("pazar." + id + ".fiyat");
+            String birim = ahYml.getString("pazar." + id + ".birim");
+            ItemStack item = itemFromBase64(ahYml.getString("pazar." + id + ".item"));
+            
+            ItemMeta meta = item.getItemMeta();
+            if (meta != null) {
+                List<String> lore = meta.hasLore() ? meta.getLore() : new ArrayList<>();
+                lore.add("§8§m-----------------------");
+                lore.add("§7Satıcı: §f" + satan);
+                lore.add("§7Fiyat: §a" + fiyat + " " + birim.toUpperCase());
+                lore.add("§8§m-----------------------");
+                lore.add("§aSatın almak için tıkla!");
+                lore.add("§8ID: " + id);
+                meta.setLore(lore);
+                item.setItemMeta(meta);
+            }
+            inv.setItem(slot++, item);
         }
         
         ItemStack cam = new ItemStack(Material.BLACK_STAINED_GLASS_PANE);
@@ -187,6 +238,30 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
             bilgi.setItemMeta(bMeta);
         }
         inv.setItem(49, bilgi);
+
+        ItemStack ara = new ItemStack(Material.COMPASS);
+        ItemMeta aMeta = ara.getItemMeta();
+        if (aMeta != null) {
+            aMeta.setDisplayName("§b§lEşya Ara");
+            aMeta.setLore(Arrays.asList("§7Pazarda arama yapmak için tıkla.", "§7Örn: diamond, stone, sword"));
+            ara.setItemMeta(aMeta);
+        }
+        inv.setItem(47, ara);
+
+        // SAYFALAMA BUTONLARI (Sol ve Sağ Ok)
+        if (sayfa > 1) {
+            ItemStack geri = new ItemStack(Material.ARROW);
+            ItemMeta gMeta = geri.getItemMeta();
+            if (gMeta != null) { gMeta.setDisplayName("§a§lÖnceki Sayfa"); geri.setItemMeta(gMeta); }
+            inv.setItem(48, geri);
+        }
+
+        if (bitisIndex < toplamEsya) {
+            ItemStack ileri = new ItemStack(Material.ARROW);
+            ItemMeta iMeta = ileri.getItemMeta();
+            if (iMeta != null) { iMeta.setDisplayName("§a§lSonraki Sayfa"); ileri.setItemMeta(iMeta); }
+            inv.setItem(50, ileri);
+        }
 
         ItemStack kapat = new ItemStack(Material.BARRIER);
         ItemMeta kMeta = kapat.getItemMeta();
@@ -203,7 +278,6 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         ItemStack clicked = e.getCurrentItem();
         if (clicked == null) return;
 
-        // --- BİRİM SEÇİM MENÜSÜ ---
         if (title.equals("§8§l» §6§lSATIŞ BİRİMİ §8§l«")) {
             e.setCancelled(true);
             
@@ -214,29 +288,46 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
                 
                 if (esya == null || fiyat == null) { p.sendMessage("§cBir hata oluştu, eşya kayboldu!"); return; }
 
-                // Pazara Ekle
                 String id = String.valueOf(System.currentTimeMillis());
                 ahYml.set("pazar." + id + ".satan", p.getName());
+                ahYml.set("pazar." + id + ".satan_uuid", p.getUniqueId().toString());
                 ahYml.set("pazar." + id + ".fiyat", fiyat);
                 ahYml.set("pazar." + id + ".birim", birim);
                 ahYml.set("pazar." + id + ".item", itemToBase64(esya));
                 try { ahYml.save(ahDosya); } catch (IOException ignored) {}
 
                 p.sendMessage("§a§l✔ §aEşya başarıyla pazara eklendi!");
-                p.sendMessage("§7Fiyat: §a" + fiyat + " " + birim.toUpperCase());
                 p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1f, 1f);
                 p.closeInventory();
             }
             return;
         }
 
-        // --- ANA PAZAR MENÜSÜ ---
-        if (title.equals("§8§l» §6§lAÇIK ARTIRMA §8§l«")) {
+        if (title.contains("§8§l» §6§lAÇIK ARTIRMA") || title.contains("§8§l» §6§lAH (Arama)")) {
             e.setCancelled(true);
             
             if (clicked.getType() == Material.BARRIER) { p.closeInventory(); return; }
             if (clicked.getType() == Material.PAPER || clicked.getType() == Material.BLACK_STAINED_GLASS_PANE) return;
-            
+
+            // SAYFA DEĞİŞTİRME
+            if (clicked.getType() == Material.ARROW) {
+                int mevcut = MEVCUT_SAYFA.getOrDefault(p.getUniqueId(), 1);
+                if (clicked.getItemMeta().getDisplayName().contains("Önceki")) MEVCUT_SAYFA.put(p.getUniqueId(), mevcut - 1);
+                else MEVCUT_SAYFA.put(p.getUniqueId(), mevcut + 1);
+                pazarMenuAc(p);
+                return;
+            }
+
+            if (clicked.getType() == Material.COMPASS) {
+                p.closeInventory();
+                ARAMA_MODU.put(p.getUniqueId(), true);
+                p.sendMessage("§e§lARAMA MODU");
+                p.sendMessage("§7Sohbete aramak istediğin eşyanın ismini yaz (İngilizce).");
+                p.sendMessage("§7Örn: §fdiamond, stone, sword");
+                p.sendMessage("§cİptal için 'iptal' yaz.");
+                return;
+            }
+
             if (clicked.hasItemMeta() && clicked.getItemMeta().getLore() != null) {
                 String id = null;
                 for (String s : clicked.getItemMeta().getLore()) {
@@ -248,52 +339,77 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         }
     }
 
+    @EventHandler
+    public void onChat(AsyncPlayerChatEvent e) {
+        Player p = e.getPlayer();
+        if (!ARAMA_MODU.containsKey(p.getUniqueId())) return;
+        
+        e.setCancelled(true);
+        String mesaj = e.getMessage();
+        ARAMA_MODU.remove(p.getUniqueId());
+        
+        if (mesaj.equalsIgnoreCase("iptal")) {
+            p.sendMessage("§cArama iptal edildi.");
+            Bukkit.getScheduler().runTask(this, () -> pazarMenuAc(p));
+            return;
+        }
+        
+        ARAMA_FILTRE.put(p.getUniqueId(), mesaj);
+        MEVCUT_SAYFA.put(p.getUniqueId(), 1); // Yeni aramada 1. sayfaya dön
+        p.sendMessage("§aEşya aranıyor: §e" + mesaj);
+        
+        Bukkit.getScheduler().runTask(this, () -> pazarMenuAc(p));
+    }
+
     private void satinAl(Player alici, String id) {
         String path = "pazar." + id;
         if (!ahYml.contains(path)) { alici.sendMessage("§cEşya artık yok!"); return; }
         
         String satan = ahYml.getString(path + ".satan");
+        String satanUUID = ahYml.getString(path + ".satan_uuid");
         double fiyat = ahYml.getDouble(path + ".fiyat");
         String birim = ahYml.getString(path + ".birim");
         ItemStack esya = itemFromBase64(ahYml.getString(path + ".item"));
 
         if (esya == null) { alici.sendMessage("§cEşya yüklenemedi!"); return; }
-        if (alici.getName().equals(satan)) { alici.sendMessage("§cKendi eşyanı satın alamazsın!"); return; }
+        
+        if (satanUUID != null && alici.getUniqueId().toString().equals(satanUUID)) {
+            alici.sendMessage("§cKendi eşyanı satın alamazsın!"); 
+            return; 
+        } else if (alici.getName().equals(satan)) {
+            alici.sendMessage("§cKendi eşyanı satın alamazsın!"); 
+            return;
+        }
 
-        // Para/Puan Kontrolü ve Transferi
         if (birim.equals("para")) {
             if (econ == null) { alici.sendMessage("§cVault yok!"); return; }
             if (econ.getBalance(alici) < fiyat) { alici.sendMessage("§cYetersiz Para! Gerekli: §e" + fiyat); return; }
             econ.withdrawPlayer(alici, fiyat);
-            econ.depositPlayer(Bukkit.getOfflinePlayer(satan), fiyat);
+            econ.depositPlayer(Bukkit.getOfflinePlayer(UUID.fromString(satanUUID)), fiyat);
         } else {
             if (ppAPI == null) { alici.sendMessage("§cPlayerPoints yok!"); return; }
             try {
                 int bakiye = (int) ppAPI.getClass().getMethod("look", UUID.class).invoke(ppAPI, alici.getUniqueId());
                 if (bakiye < fiyat) { alici.sendMessage("§cYetersiz Puan! Gerekli: §e" + fiyat); return; }
                 ppAPI.getClass().getMethod("take", UUID.class, int.class).invoke(ppAPI, alici.getUniqueId(), (int) fiyat);
-                ppAPI.getClass().getMethod("give", UUID.class, int.class).invoke(ppAPI, Bukkit.getOfflinePlayer(satan).getUniqueId(), (int) fiyat);
+                ppAPI.getClass().getMethod("give", UUID.class, int.class).invoke(ppAPI, UUID.fromString(satanUUID), (int) fiyat);
             } catch (Exception ex) { alici.sendMessage("§cPuan hatası!"); return; }
         }
 
-        // Eşyayı alıcıya ver
         HashMap<Integer, ItemStack> kalanlar = alici.getInventory().addItem(esya);
         for (ItemStack kalan : kalanlar.values()) alici.getWorld().dropItemNaturally(alici.getLocation(), kalan);
 
-        // Satıcıya mesaj
-        Player saticiP = Bukkit.getPlayer(satan);
+        Player saticiP = Bukkit.getPlayer(UUID.fromString(satanUUID));
         if (saticiP != null) saticiP.sendMessage("§a[AH] §e" + alici.getName() + " §7senin eşyanı §e" + fiyat + " " + birim + " §7karşılığında satın aldı!");
 
-        // Kaydet ve menüyü yenile
         ahYml.set(path, null);
         try { ahYml.save(ahDosya); } catch (IOException ignored) {}
         
         alici.sendMessage("§a§l✔ §aEşyayı başarıyla satın aldın!");
         alici.playSound(alici.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1f, 1f);
-        pazarMenuAc(alici); // Yenile
+        pazarMenuAc(alici); 
     }
 
-    // --- BASE64 EŞYA KAYDETME (Enchant vs. kaybolmaması için) ---
     private String itemToBase64(ItemStack item) {
         try {
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
@@ -313,4 +429,4 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
             return item;
         } catch (Exception e) { return null; }
     }
-                          }
+    }
