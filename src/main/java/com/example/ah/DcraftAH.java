@@ -2,6 +2,8 @@ package com.example.ah;
 
 import net.milkbowl.vault.economy.Economy;
 import org.bukkit.*;
+import org.bukkit.block.Block;
+import org.bukkit.block.Sign;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -11,8 +13,8 @@ import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
+import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
-import org.bukkit.event.player.AsyncPlayerChatEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.ItemFlag;
 import org.bukkit.inventory.ItemStack;
@@ -40,12 +42,13 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
     private final Map<UUID, ItemStack> BEKLEYEN_ESYA = new HashMap<>();
     private final Map<UUID, Double> BEKLEYEN_FIYAT = new HashMap<>();
     
-    // Arama ve Sayfalama İçin
-    private final Map<UUID, Boolean> ARAMA_MODU = new HashMap<>();
     private final Map<UUID, String> ARAMA_FILTRE = new HashMap<>();
     private final Map<UUID, Integer> MEVCUT_SAYFA = new HashMap<>();
+    
+    // Tabela ile arama için konum tutucu
+    private final Map<UUID, Location> ARAMA_TABELA = new HashMap<>();
 
-    private final int ESLYA_LIMIT = 10; // Oyuncu başına max eşya sınırı
+    private final int ESLYA_LIMIT = 10; 
     private final int SAYFA_BASI_ESYA = 45;
 
     @Override
@@ -87,7 +90,6 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
                 return true;
             }
 
-            // EŞYA SINIRI KONTROLÜ
             int mevcutEsya = getOyuncuEsyaSayisi(p.getUniqueId().toString());
             if (mevcutEsya >= ESLYA_LIMIT) {
                 p.sendMessage("§cPazarda aynı anda en fazla §e" + ESLYA_LIMIT + " §ceşya satabilirsin!");
@@ -182,7 +184,7 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         String aranan = ARAMA_FILTRE.get(p.getUniqueId());
         int sayfa = MEVCUT_SAYFA.getOrDefault(p.getUniqueId(), 1);
         
-        String title = aranan != null ? "§8§l» §6§lAH (Arama) §8§l«" : "§8§l» §6§lAÇIK ARTIRMA §8§l«";
+        String title = aranan != null ? "§8§l» §6§lAH (Arama: " + aranan + ") §8§l«" : "§8§l» §6§lAÇIK ARTIRMA §8§l«";
         Inventory inv = Bukkit.createInventory(null, 54, title);
         
         List<String> gecerliIdler = new ArrayList<>();
@@ -216,7 +218,10 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
                 List<String> lore = meta.hasLore() ? meta.getLore() : new ArrayList<>();
                 lore.add("§8§m-----------------------");
                 lore.add("§7Satıcı: §f" + satan);
-                lore.add("§7Fiyat: §a" + fiyat + " " + birim.toUpperCase());
+                
+                String birimYazi = birim.equals("para") ? "§ePARA" : "§bDCRAFT PUANI";
+                lore.add("§7Fiyat: §a" + fiyat + " " + birimYazi);
+                
                 lore.add("§8§m-----------------------");
                 lore.add("§aSatın almak için tıkla!");
                 lore.add("§8ID: " + id);
@@ -239,27 +244,48 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         }
         inv.setItem(49, bilgi);
 
+        // ARAMA BUTONU
         ItemStack ara = new ItemStack(Material.COMPASS);
         ItemMeta aMeta = ara.getItemMeta();
         if (aMeta != null) {
-            aMeta.setDisplayName("§b§lEşya Ara");
-            aMeta.setLore(Arrays.asList("§7Pazarda arama yapmak için tıkla.", "§7Örn: diamond, stone, sword"));
+            aMeta.setDisplayName("§b§lTabela ile Eşya Ara");
+            aMeta.setLore(Arrays.asList("§7Pazarda arama yapmak için tıkla.", "§7Karşına bir tabela çıkacak.", "§7Örn: elmas, demir, taş"));
             ara.setItemMeta(aMeta);
         }
         inv.setItem(47, ara);
 
-        // SAYFALAMA BUTONLARI (Sol ve Sağ Ok)
+        // ARAMAYI TEMİZLE
+        if (aranan != null) {
+            ItemStack temizle = new ItemStack(Material.BARRIER);
+            ItemMeta tMeta = temizle.getItemMeta();
+            if (tMeta != null) {
+                tMeta.setDisplayName("§c§lAramayı Temizle");
+                tMeta.setLore(Arrays.asList("§7Tüm eşyaları tekrar göster."));
+                temizle.setItemMeta(tMeta);
+            }
+            inv.setItem(51, temizle);
+        }
+
+        // --- SAYFA OKLARI ---
         if (sayfa > 1) {
             ItemStack geri = new ItemStack(Material.ARROW);
             ItemMeta gMeta = geri.getItemMeta();
-            if (gMeta != null) { gMeta.setDisplayName("§a§lÖnceki Sayfa"); geri.setItemMeta(gMeta); }
+            if (gMeta != null) { 
+                gMeta.setDisplayName("§a§l< Önceki Sayfa"); 
+                gMeta.setLore(Arrays.asList("§7Sayfa: " + (sayfa - 1)));
+                geri.setItemMeta(gMeta); 
+            }
             inv.setItem(48, geri);
         }
 
         if (bitisIndex < toplamEsya) {
             ItemStack ileri = new ItemStack(Material.ARROW);
             ItemMeta iMeta = ileri.getItemMeta();
-            if (iMeta != null) { iMeta.setDisplayName("§a§lSonraki Sayfa"); ileri.setItemMeta(iMeta); }
+            if (iMeta != null) { 
+                iMeta.setDisplayName("§a§lSonraki Sayfa >"); 
+                iMeta.setLore(Arrays.asList("§7Sayfa: " + (sayfa + 1)));
+                ileri.setItemMeta(iMeta); 
+            }
             inv.setItem(50, ileri);
         }
 
@@ -267,6 +293,58 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         ItemMeta kMeta = kapat.getItemMeta();
         if (kMeta != null) { kMeta.setDisplayName("§c§lKapat"); kapat.setItemMeta(kMeta); }
         inv.setItem(53, kapat);
+
+        p.openInventory(inv);
+    }
+
+    private void onayMenuAc(Player p, String id) {
+        String path = "pazar." + id;
+        if (!ahYml.contains(path)) { p.sendMessage("§cEşya artık yok!"); pazarMenuAc(p); return; }
+        
+        String satan = ahYml.getString(path + ".satan");
+        double fiyat = ahYml.getDouble(path + ".fiyat");
+        String birim = ahYml.getString(path + ".birim");
+        ItemStack esya = itemFromBase64(ahYml.getString(path + ".item"));
+
+        if (esya == null) { p.sendMessage("§cEşya yüklenemedi!"); return; }
+
+        Inventory inv = Bukkit.createInventory(null, 27, "§8§l» §6§lSATIN ALMA ONAYI §8§l«");
+        
+        ItemStack cam = new ItemStack(Material.GRAY_STAINED_GLASS_PANE);
+        ItemMeta cm = cam.getItemMeta(); if (cm != null) { cm.setDisplayName(" "); cam.setItemMeta(cm); }
+        for (int i = 0; i < 27; i++) inv.setItem(i, cam);
+
+        ItemMeta eMeta = esya.getItemMeta();
+        if (eMeta != null) {
+            List<String> lore = eMeta.hasLore() ? eMeta.getLore() : new ArrayList<>();
+            lore.add("");
+            lore.add("§7Satıcı: §f" + satan);
+            String birimYazi = birim.equals("para") ? "§ePARA" : "§bDCRAFT PUANI";
+            lore.add("§7Ödenecek: §a" + fiyat + " " + birimYazi);
+            eMeta.setLore(lore);
+            esya.setItemMeta(eMeta);
+        }
+        inv.setItem(13, esya);
+
+        ItemStack onay = new ItemStack(Material.LIME_STAINED_GLASS_PANE);
+        ItemMeta oMeta = onay.getItemMeta();
+        if (oMeta != null) {
+            oMeta.setDisplayName("§a§lSATIN ALIMI ONAYLA");
+            oMeta.setLore(Arrays.asList("§7Bu eşyayı satın almak için tıkla.", "§8ID: " + id));
+            oMeta.addEnchant(Enchantment.UNBREAKING, 1, true);
+            oMeta.addItemFlags(ItemFlag.HIDE_ENCHANTS);
+            onay.setItemMeta(oMeta);
+        }
+        inv.setItem(11, onay);
+
+        ItemStack iptal = new ItemStack(Material.BARRIER);
+        ItemMeta iMeta = iptal.getItemMeta();
+        if (iMeta != null) {
+            iMeta.setDisplayName("§c§lİPTAL ET");
+            iMeta.setLore(Arrays.asList("§7Menüye geri dön."));
+            iptal.setItemMeta(iMeta);
+        }
+        inv.setItem(15, iptal);
 
         p.openInventory(inv);
     }
@@ -303,13 +381,40 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
             return;
         }
 
-        if (title.contains("§8§l» §6§lAÇIK ARTIRMA") || title.contains("§8§l» §6§lAH (Arama)")) {
+        if (title.equals("§8§l» §6§lSATIN ALMA ONAYI §8§l«")) {
             e.setCancelled(true);
             
-            if (clicked.getType() == Material.BARRIER) { p.closeInventory(); return; }
+            if (clicked.getType() == Material.BARRIER) {
+                pazarMenuAc(p); 
+                return;
+            }
+            
+            if (clicked.getType() == Material.LIME_STAINED_GLASS_PANE) {
+                String id = null;
+                if (clicked.getItemMeta().getLore() != null) {
+                    for (String s : clicked.getItemMeta().getLore()) {
+                        if (s.startsWith("§8ID: ")) { id = s.replace("§8ID: ", ""); break; }
+                    }
+                }
+                if (id != null) satinAl(p, id);
+            }
+            return;
+        }
+
+        if (title.contains("§8§l» §6§lAÇIK ARTIRMA") || title.contains("§8§l» §6§lAH (Arama:")) {
+            e.setCancelled(true);
+            
+            if (clicked.getType() == Material.BARRIER) { 
+                if (title.contains("Arama:")) {
+                    ARAMA_FILTRE.remove(p.getUniqueId());
+                    pazarMenuAc(p);
+                } else {
+                    p.closeInventory(); 
+                }
+                return; 
+            }
             if (clicked.getType() == Material.PAPER || clicked.getType() == Material.BLACK_STAINED_GLASS_PANE) return;
 
-            // SAYFA DEĞİŞTİRME
             if (clicked.getType() == Material.ARROW) {
                 int mevcut = MEVCUT_SAYFA.getOrDefault(p.getUniqueId(), 1);
                 if (clicked.getItemMeta().getDisplayName().contains("Önceki")) MEVCUT_SAYFA.put(p.getUniqueId(), mevcut - 1);
@@ -320,11 +425,7 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
 
             if (clicked.getType() == Material.COMPASS) {
                 p.closeInventory();
-                ARAMA_MODU.put(p.getUniqueId(), true);
-                p.sendMessage("§e§lARAMA MODU");
-                p.sendMessage("§7Sohbete aramak istediğin eşyanın ismini yaz (İngilizce).");
-                p.sendMessage("§7Örn: §fdiamond, stone, sword");
-                p.sendMessage("§cİptal için 'iptal' yaz.");
+                tabelaAc(p); // Tabela ile arama başlat
                 return;
             }
 
@@ -333,37 +434,71 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
                 for (String s : clicked.getItemMeta().getLore()) {
                     if (s.startsWith("§8ID: ")) { id = s.replace("§8ID: ", ""); break; }
                 }
-                if (id != null) satinAl(p, id);
+                if (id != null) onayMenuAc(p, id);
             }
             return;
         }
     }
 
+    // --- TABELA İLE ARAMA SİSTEMİ ---
+    private void tabelaAc(Player p) {
+        p.closeInventory();
+        Location loc = p.getLocation();
+        Block block = loc.getWorld().getBlockAt(loc.getBlockX(), loc.getBlockY() - 2, loc.getBlockZ());
+        block.setType(Material.OAK_SIGN);
+        
+        ARAMA_TABELA.put(p.getUniqueId(), block.getLocation());
+        
+        Sign sign = (Sign) block.getState();
+        p.openSign(sign);
+        p.sendMessage("§aTabelaya aramak istediğin eşyayı yaz (Örn: elmas, demir) ve Enter'a bas!");
+    }
+
     @EventHandler
-    public void onChat(AsyncPlayerChatEvent e) {
+    public void onSignChange(SignChangeEvent e) {
         Player p = e.getPlayer();
-        if (!ARAMA_MODU.containsKey(p.getUniqueId())) return;
-        
+        if (!ARAMA_TABELA.containsKey(p.getUniqueId())) return;
+
+        String yazilan = e.getLine(0);
         e.setCancelled(true);
-        String mesaj = e.getMessage();
-        ARAMA_MODU.remove(p.getUniqueId());
-        
-        if (mesaj.equalsIgnoreCase("iptal")) {
-            p.sendMessage("§cArama iptal edildi.");
+
+        Location tabelaLoc = ARAMA_TABELA.remove(p.getUniqueId());
+        if (tabelaLoc != null) tabelaLoc.getBlock().setType(Material.AIR); // Tabelayı sil
+
+        if (yazilan == null || yazilan.isEmpty()) {
+            p.sendMessage("§cBir şey yazmadın, arama iptal edildi!");
             Bukkit.getScheduler().runTask(this, () -> pazarMenuAc(p));
             return;
         }
+
+        // TÜRKÇE -> İNGİLİZCE ÇEVİRİ SÖZLÜĞÜ
+        String aranan = yazilan.toUpperCase().replace("İ", "I").replace("Ş", "S").replace("Ğ", "G").replace("Ü", "U").replace("Ö", "O").replace("Ç", "C");
         
-        ARAMA_FILTRE.put(p.getUniqueId(), mesaj);
-        MEVCUT_SAYFA.put(p.getUniqueId(), 1); // Yeni aramada 1. sayfaya dön
-        p.sendMessage("§aEşya aranıyor: §e" + mesaj);
+        if (aranan.contains("ELMAS")) aranan = "DIAMOND";
+        else if (aranan.contains("DEMIR")) aranan = "IRON";
+        else if (aranan.contains("ALTIN")) aranan = "GOLD";
+        else if (aranan.contains("ZUMRUT")) aranan = "EMERALD";
+        else if (aranan.contains("KOMUR")) aranan = "COAL";
+        else if (aranan.contains("ODUN")) aranan = "LOG";
+        else if (aranan.contains("TAS")) aranan = "STONE";
+        else if (aranan.contains("TOPRAK")) aranan = "DIRT";
+        else if (aranan.contains("KILIC")) aranan = "SWORD";
+        else if (aranan.contains("ZIRH")) aranan = "CHESTPLATE";
+        else if (aranan.contains("BALTA")) aranan = "AXE";
+        else if (aranan.contains("KAZMA")) aranan = "PICKAXE";
+        else if (aranan.contains("EKMEK")) aranan = "BREAD";
+        else if (aranan.contains("ET")) aranan = "BEEF";
+
+        ARAMA_FILTRE.put(p.getUniqueId(), aranan);
+        MEVCUT_SAYFA.put(p.getUniqueId(), 1);
+        p.sendMessage("§aEşya aranıyor: §e" + yazilan + " §7(Sistemde: " + aranan + ")");
         
         Bukkit.getScheduler().runTask(this, () -> pazarMenuAc(p));
     }
 
     private void satinAl(Player alici, String id) {
         String path = "pazar." + id;
-        if (!ahYml.contains(path)) { alici.sendMessage("§cEşya artık yok!"); return; }
+        if (!ahYml.contains(path)) { alici.sendMessage("§cEşya artık yok!"); alici.closeInventory(); return; }
         
         String satan = ahYml.getString(path + ".satan");
         String satanUUID = ahYml.getString(path + ".satan_uuid");
@@ -375,22 +510,24 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         
         if (satanUUID != null && alici.getUniqueId().toString().equals(satanUUID)) {
             alici.sendMessage("§cKendi eşyanı satın alamazsın!"); 
+            alici.closeInventory();
             return; 
         } else if (alici.getName().equals(satan)) {
             alici.sendMessage("§cKendi eşyanı satın alamazsın!"); 
+            alici.closeInventory();
             return;
         }
 
         if (birim.equals("para")) {
             if (econ == null) { alici.sendMessage("§cVault yok!"); return; }
-            if (econ.getBalance(alici) < fiyat) { alici.sendMessage("§cYetersiz Para! Gerekli: §e" + fiyat); return; }
+            if (econ.getBalance(alici) < fiyat) { alici.sendMessage("§cYetersiz Para! Gerekli: §e" + fiyat); alici.closeInventory(); return; }
             econ.withdrawPlayer(alici, fiyat);
             econ.depositPlayer(Bukkit.getOfflinePlayer(UUID.fromString(satanUUID)), fiyat);
         } else {
             if (ppAPI == null) { alici.sendMessage("§cPlayerPoints yok!"); return; }
             try {
                 int bakiye = (int) ppAPI.getClass().getMethod("look", UUID.class).invoke(ppAPI, alici.getUniqueId());
-                if (bakiye < fiyat) { alici.sendMessage("§cYetersiz Puan! Gerekli: §e" + fiyat); return; }
+                if (bakiye < fiyat) { alici.sendMessage("§cYetersiz Puan! Gerekli: §e" + fiyat); alici.closeInventory(); return; }
                 ppAPI.getClass().getMethod("take", UUID.class, int.class).invoke(ppAPI, alici.getUniqueId(), (int) fiyat);
                 ppAPI.getClass().getMethod("give", UUID.class, int.class).invoke(ppAPI, UUID.fromString(satanUUID), (int) fiyat);
             } catch (Exception ex) { alici.sendMessage("§cPuan hatası!"); return; }
@@ -407,7 +544,9 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         
         alici.sendMessage("§a§l✔ §aEşyayı başarıyla satın aldın!");
         alici.playSound(alici.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1f, 1f);
-        pazarMenuAc(alici); 
+        
+        alici.closeInventory();
+        Bukkit.getScheduler().runTaskLater(this, () -> pazarMenuAc(alici), 5L);
     }
 
     private String itemToBase64(ItemStack item) {
@@ -429,4 +568,4 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
             return item;
         } catch (Exception e) { return null; }
     }
-    }
+                    }
