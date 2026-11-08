@@ -1,0 +1,12 @@
+name: DcraftAH
+version: 1.0.0
+main: com.example.ah.DcraftAH
+api-version: 1.21
+author: Sen
+description: Premium acik artirma sistemi
+softdepend: [Vault, PlayerPoints]
+
+commands:
+  ah:
+    description: Acik artirma menusunu acar
+    aliases: [pazar, auction]
