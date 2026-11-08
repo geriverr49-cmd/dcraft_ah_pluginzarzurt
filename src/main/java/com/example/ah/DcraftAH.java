@@ -45,7 +45,6 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
     private final Map<UUID, String> ARAMA_FILTRE = new HashMap<>();
     private final Map<UUID, Integer> MEVCUT_SAYFA = new HashMap<>();
     
-    // Tabela ile arama için konum tutucu
     private final Map<UUID, Location> ARAMA_TABELA = new HashMap<>();
 
     private final int ESLYA_LIMIT = 10; 
@@ -244,7 +243,6 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         }
         inv.setItem(49, bilgi);
 
-        // ARAMA BUTONU
         ItemStack ara = new ItemStack(Material.COMPASS);
         ItemMeta aMeta = ara.getItemMeta();
         if (aMeta != null) {
@@ -254,7 +252,6 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         }
         inv.setItem(47, ara);
 
-        // ARAMAYI TEMİZLE
         if (aranan != null) {
             ItemStack temizle = new ItemStack(Material.BARRIER);
             ItemMeta tMeta = temizle.getItemMeta();
@@ -266,28 +263,34 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
             inv.setItem(51, temizle);
         }
 
-        // --- SAYFA OKLARI ---
-        if (sayfa > 1) {
-            ItemStack geri = new ItemStack(Material.ARROW);
-            ItemMeta gMeta = geri.getItemMeta();
-            if (gMeta != null) { 
+        // --- HER ZAMAN GÖRÜNEN SAYFA OKLARI ---
+        ItemStack geri = new ItemStack(Material.ARROW);
+        ItemMeta gMeta = geri.getItemMeta();
+        if (gMeta != null) { 
+            if (sayfa > 1) {
                 gMeta.setDisplayName("§a§l< Önceki Sayfa"); 
                 gMeta.setLore(Arrays.asList("§7Sayfa: " + (sayfa - 1)));
-                geri.setItemMeta(gMeta); 
+            } else {
+                gMeta.setDisplayName("§c§l< Önceki Sayfa"); 
+                gMeta.setLore(Arrays.asList("§7Zaten ilk sayfadasın."));
             }
-            inv.setItem(48, geri);
+            geri.setItemMeta(gMeta); 
         }
+        inv.setItem(48, geri);
 
-        if (bitisIndex < toplamEsya) {
-            ItemStack ileri = new ItemStack(Material.ARROW);
-            ItemMeta iMeta = ileri.getItemMeta();
-            if (iMeta != null) { 
+        ItemStack ileri = new ItemStack(Material.ARROW);
+        ItemMeta iMeta = ileri.getItemMeta();
+        if (iMeta != null) { 
+            if (bitisIndex < toplamEsya) {
                 iMeta.setDisplayName("§a§lSonraki Sayfa >"); 
                 iMeta.setLore(Arrays.asList("§7Sayfa: " + (sayfa + 1)));
-                ileri.setItemMeta(iMeta); 
+            } else {
+                iMeta.setDisplayName("§c§lSonraki Sayfa >"); 
+                iMeta.setLore(Arrays.asList("§7Başka eşya yok."));
             }
-            inv.setItem(50, ileri);
+            ileri.setItemMeta(iMeta); 
         }
+        inv.setItem(50, ileri);
 
         ItemStack kapat = new ItemStack(Material.BARRIER);
         ItemMeta kMeta = kapat.getItemMeta();
@@ -417,15 +420,22 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
 
             if (clicked.getType() == Material.ARROW) {
                 int mevcut = MEVCUT_SAYFA.getOrDefault(p.getUniqueId(), 1);
-                if (clicked.getItemMeta().getDisplayName().contains("Önceki")) MEVCUT_SAYFA.put(p.getUniqueId(), mevcut - 1);
-                else MEVCUT_SAYFA.put(p.getUniqueId(), mevcut + 1);
-                pazarMenuAc(p);
+                if (clicked.getItemMeta().getDisplayName().contains("Önceki")) {
+                    if (mevcut > 1) {
+                        MEVCUT_SAYFA.put(p.getUniqueId(), mevcut - 1);
+                        pazarMenuAc(p);
+                    }
+                } else {
+                    // Sağ ok kontrolü (eşya varsa ilerle)
+                    MEVCUT_SAYFA.put(p.getUniqueId(), mevcut + 1);
+                    pazarMenuAc(p); // Zaten eşya yoksa aynı sayfada kalacak
+                }
                 return;
             }
 
             if (clicked.getType() == Material.COMPASS) {
                 p.closeInventory();
-                tabelaAc(p); // Tabela ile arama başlat
+                tabelaAc(p);
                 return;
             }
 
@@ -440,7 +450,6 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         }
     }
 
-    // --- TABELA İLE ARAMA SİSTEMİ ---
     private void tabelaAc(Player p) {
         p.closeInventory();
         Location loc = p.getLocation();
@@ -463,7 +472,7 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
         e.setCancelled(true);
 
         Location tabelaLoc = ARAMA_TABELA.remove(p.getUniqueId());
-        if (tabelaLoc != null) tabelaLoc.getBlock().setType(Material.AIR); // Tabelayı sil
+        if (tabelaLoc != null) tabelaLoc.getBlock().setType(Material.AIR); 
 
         if (yazilan == null || yazilan.isEmpty()) {
             p.sendMessage("§cBir şey yazmadın, arama iptal edildi!");
@@ -471,7 +480,6 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
             return;
         }
 
-        // TÜRKÇE -> İNGİLİZCE ÇEVİRİ SÖZLÜĞÜ
         String aranan = yazilan.toUpperCase().replace("İ", "I").replace("Ş", "S").replace("Ğ", "G").replace("Ü", "U").replace("Ö", "O").replace("Ç", "C");
         
         if (aranan.contains("ELMAS")) aranan = "DIAMOND";
@@ -568,4 +576,4 @@ public class DcraftAH extends JavaPlugin implements CommandExecutor, Listener {
             return item;
         } catch (Exception e) { return null; }
     }
-                    }
+    }
